@@ -60,8 +60,9 @@ public:
     bool getRequestedWindowSize(int32_t& width, int32_t& height);
 
     enum {
-        DEPTH_PEELING_MODE,
-        WEIGHTED_BLENDED_MODE,
+        DEPTH_PEELING_MODE,         //  http://developer.download.nvidia.com/SDK/10/opengl/screenshots/samples/dual_depth_peeling.html
+        WEIGHTED_BLENDED_MODE,      //  http://jcgt.org/published/0002/02/09/
+        MOMENT_TRANSPARENCY_MODE,   //  https://briansharpe.files.wordpress.com/2018/07/moment-transparency-av.pdf
         MODE_COUNT
     };
 
@@ -82,6 +83,8 @@ protected:
     void DeleteDepthPeelingRenderTargets();
     void InitAccumulationRenderTargets();
     void DeleteAccumulationRenderTargets();
+    void InitMomentTransparencyRenderTargets();
+    void DeleteMomentTransparencyRenderTargets();
     NvModelGL* LoadModel(const char *model_filename);
     void DrawModel(NvGLSLProgram* shader);
     void BuildShaders();
@@ -89,6 +92,7 @@ protected:
     void ReloadShaders();
     void RenderFrontToBackPeeling();
     void RenderWeightedBlendedOIT();
+    void RenderMomentTransparency();
     void RenderFullscreenQuad(NvGLSLProgram* shader);
 
     NvModelGL *m_models[MODELS_COUNT];
@@ -105,6 +109,9 @@ protected:
     NvGLSLProgram* m_shaderWeightedBlend;
     NvGLSLProgram* m_shaderWeightedFinal;
 
+    NvGLSLProgram* m_momentCaptureMomentsBlend;
+    NvGLSLProgram* m_momentTransparencyBlend;
+
     int m_imageWidth;
     int m_imageHeight;
     float m_opacity;
@@ -116,7 +123,8 @@ protected:
 #endif
 
     const float *m_backgroundColor;
-    float m_weightParameter;
+    float m_wb_weightParameter;
+    float m_mt_overestimationWeight;
 
     GLuint m_frontFboId[2];
     GLuint m_frontDepthTexId[2];
@@ -126,6 +134,10 @@ protected:
 
     GLuint m_accumulationTexId[2];
     GLuint m_accumulationFboId;
+
+    GLuint m_momentTexId;
+    GLuint m_totalOpticalDepthTexId;
+    GLuint m_momentFboId;       //  holds both moments + totalOpticalDepth
 
     nv::matrix4f m_MVP;
     nv::matrix4f m_normalMat;

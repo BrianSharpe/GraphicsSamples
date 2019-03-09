@@ -34,8 +34,10 @@
 layout(location=0) in vec4 inVertexPosition;
 layout(location=1) in vec3 inNormal;
 layout(location=0) out vec3 vTexCoord;
+layout(location=1) out vec3 vViewPos;
 
 uniform mat4 uModelViewMatrix;
+uniform mat4 uModelViewProjMatrix;
 uniform mat4 uNormalMatrix;
 
 vec3 ShadeVertex()
@@ -46,6 +48,7 @@ vec3 ShadeVertex()
 
 void main(void)
 {
-     gl_Position = uModelViewMatrix * inVertexPosition;
-	 vTexCoord = ShadeVertex();
+    vViewPos = ( uModelViewMatrix * inVertexPosition ).xyz;
+    gl_Position = uModelViewProjMatrix * inVertexPosition;
+    vTexCoord = ShadeVertex();
 }

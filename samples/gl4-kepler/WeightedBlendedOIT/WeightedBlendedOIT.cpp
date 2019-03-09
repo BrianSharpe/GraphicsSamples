@@ -53,6 +53,9 @@ const static float g_white[3] = {1.0,1.0,1.0};
 const static float g_sky[3] = {0.1,0.3,0.7};
 const static float g_black[3] = {0.0};
 
+const static float kNear = 0.1f;
+const static float kFar = 10.0f;
+
 // The sample has a dropdown menu in the TweakBar that allows the user to
 // select a specific stage or pass of the algorithm for visualization.
 // These are the options in that menu (for more details, please see the
@@ -60,7 +63,8 @@ const static float g_black[3] = {0.0};
 static NvTweakEnum<uint32_t> ALGORITHM_OPTIONS[] =
 {
     {"Depth Peeling", WeightedBlendedOIT::DEPTH_PEELING_MODE},
-    {"Weighted Blended", WeightedBlendedOIT::WEIGHTED_BLENDED_MODE}
+    {"Weighted Blended", WeightedBlendedOIT::WEIGHTED_BLENDED_MODE},
+    {"Moment Transparency", WeightedBlendedOIT::MOMENT_TRANSPARENCY_MODE}
 };
 
 static NvTweakEnum<uint32_t> MODEL_OPTIONS[] =
@@ -72,12 +76,21 @@ static NvTweakEnum<uint32_t> MODEL_OPTIONS[] =
 WeightedBlendedOIT::WeightedBlendedOIT() :
     m_imageWidth(0),
     m_imageHeight(0),
-    m_opacity(0.6f),
-    m_mode(WEIGHTED_BLENDED_MODE),
+    m_opacity(0.8f),
+    m_mode(MOMENT_TRANSPARENCY_MODE),
     m_numGeoPasses(0),
     m_backgroundColor(g_sky),
-    m_weightParameter(0.5f)
+    m_wb_weightParameter(0.5f),
+    m_mt_overestimationWeight(0.25f),
+    m_momentCaptureMomentsBlend(0),
+    m_momentTransparencyBlend(0),
+    m_accumulationFboId(0),
+    m_momentTexId(0),
+    m_totalOpticalDepthTexId(0),
+    m_momentFboId(0)
 {
+    m_accumulationTexId[0] = m_accumulationTexId[1] = 0;
+
     m_transformer->setTranslationVec(nv::vec3f(0.0f, 0.0f, -2.5f));
 
     // Required in all subclasses to avoid silent link issues
@@ -109,7 +122,8 @@ void WeightedBlendedOIT::initUI()
     if (mTweakBar)
     {
         mTweakBar->addValue("Opacity:", m_opacity, 0.0f, 1.0f, 0.05f);
-        mTweakBar->addValue("Weight Parameter:", m_weightParameter, 0.1f, 1.0f, 0.05f);
+        mTweakBar->addValue("WB Weight Parameter:", m_wb_weightParameter, 0.1f, 1.0f, 0.05f);
+        mTweakBar->addValue("MT Overestimation Weight:", m_mt_overestimationWeight, 0.0f, 1.0f, 0.01f);
         mTweakBar->addEnum("Model:", m_modelID, MODEL_OPTIONS, MODELS_COUNT);
         mTweakBar->addEnum("OIT Method:", m_mode, ALGORITHM_OPTIONS, MODE_COUNT);
     }
@@ -141,6 +155,7 @@ void WeightedBlendedOIT::initRendering(void)
     // Allocate render targets first
     InitDepthPeelingRenderTargets();
     InitAccumulationRenderTargets();
+    InitMomentTransparencyRenderTargets();
     glBindFramebuffer(GL_FRAMEBUFFER, getMainFBO());
 
     BuildShaders();
@@ -175,6 +190,9 @@ void WeightedBlendedOIT::reshape(int32_t width, int32_t height)
 
         DeleteAccumulationRenderTargets();
         InitAccumulationRenderTargets();
+
+        DeleteMomentTransparencyRenderTargets();
+        InitMomentTransparencyRenderTargets();
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, getMainFBO());
@@ -192,9 +210,8 @@ void WeightedBlendedOIT::draw(void)
     m_numGeoPasses = 0;
 
     nv::matrix4f proj;
-    nv::perspective(proj, 45.0f, (GLfloat)m_width / (GLfloat)m_height, 0.1f, 10.0f);
+    nv::perspective(proj, 45.0f, (GLfloat)m_width / (GLfloat)m_height, kNear, kFar);
     m_MVP = proj * m_transformer->getModelViewMat();
-
     m_normalMat = m_transformer->getRotationMat();
 
     switch (m_mode)
@@ -204,6 +221,9 @@ void WeightedBlendedOIT::draw(void)
             break;
         case WEIGHTED_BLENDED_MODE:
             RenderWeightedBlendedOIT();
+            break;
+	case MOMENT_TRANSPARENCY_MODE:
+            RenderMomentTransparency();
             break;
     }
 
@@ -327,6 +347,48 @@ void WeightedBlendedOIT::DeleteAccumulationRenderTargets()
 }
 
 //--------------------------------------------------------------------------
+void WeightedBlendedOIT::InitMomentTransparencyRenderTargets()
+{
+    glGenTextures(1, &m_momentTexId);
+    glGenTextures(1, &m_totalOpticalDepthTexId);
+
+    //	moment buffer
+    glBindTexture(GL_TEXTURE_RECTANGLE, m_momentTexId);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_RGBA32F,
+                 m_imageWidth, m_imageHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+
+    //	total optical depth buffer
+    glBindTexture(GL_TEXTURE_RECTANGLE, m_totalOpticalDepthTexId);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_R32F,
+                 m_imageWidth, m_imageHeight, 0, GL_RED, GL_FLOAT, NULL);
+
+    glGenFramebuffers(1, &m_momentFboId);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_momentFboId);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_RECTANGLE, m_momentTexId, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_RECTANGLE, m_totalOpticalDepthTexId, 0);
+
+    CHECK_GL_ERROR();
+}
+
+//--------------------------------------------------------------------------
+void WeightedBlendedOIT::DeleteMomentTransparencyRenderTargets()
+{
+    glDeleteFramebuffers(1, &m_momentFboId);
+    glDeleteTextures(1, &m_momentTexId);
+    glDeleteTextures(1, &m_totalOpticalDepthTexId);
+}
+
+//--------------------------------------------------------------------------
 NvModelGL* WeightedBlendedOIT::LoadModel(const char *model_filename)
 {
     // Load model data for scene geometry
@@ -346,7 +408,8 @@ void WeightedBlendedOIT::DrawModel(NvGLSLProgram* shader)
 {
     CHECK_GL_ERROR();
     shader->setUniformMatrix4fv("uNormalMatrix", m_normalMat._array);
-    shader->setUniformMatrix4fv("uModelViewMatrix", m_MVP._array);
+    shader->setUniformMatrix4fv("uModelViewMatrix", m_transformer->getModelViewMat()._array);
+    shader->setUniformMatrix4fv("uModelViewProjMatrix", m_MVP._array);
     m_models[m_modelID]->drawElements(0, 1);
     CHECK_GL_ERROR();
 
@@ -375,6 +438,8 @@ void WeightedBlendedOIT::BuildShaders()
     char* front_peeling_init_fragment = NvAssetLoaderRead("shaders/front_peeling_init_fragment.glsl", len);
     char* front_peeling_peel_fragment = NvAssetLoaderRead("shaders/front_peeling_peel_fragment.glsl", len);
     char* weighted_blend_fragment = NvAssetLoaderRead("shaders/weighted_blend_fragment.glsl", len);
+    char* moment_transparency_capturemoments_fragment = NvAssetLoaderRead("shaders/moment_transparency_capturemoments_fragment.glsl", len);
+    char* moment_transparency_blend_fragment = NvAssetLoaderRead("shaders/moment_transparency_blend_fragment.glsl", len);
 
     const char* vert[1];
     const char* frag[2];
@@ -393,11 +458,21 @@ void WeightedBlendedOIT::BuildShaders()
     m_shaderWeightedBlend = NvGLSLProgram::createFromStrings(vert, 1, frag, 2);
     NV_ASSERT(m_shaderWeightedBlend);
 
+    frag[1] = moment_transparency_capturemoments_fragment;
+    m_momentCaptureMomentsBlend = NvGLSLProgram::createFromStrings(vert, 1, frag, 2);
+    NV_ASSERT(m_momentCaptureMomentsBlend);
+
+    frag[1] = moment_transparency_blend_fragment;
+    m_momentTransparencyBlend = NvGLSLProgram::createFromStrings(vert, 1, frag, 2);
+    NV_ASSERT(m_momentTransparencyBlend);
+
     NvAssetLoaderFree(base_shade_vertex);
     NvAssetLoaderFree(shade_fragment);
     NvAssetLoaderFree(front_peeling_init_fragment);
     NvAssetLoaderFree(front_peeling_peel_fragment);
     NvAssetLoaderFree(weighted_blend_fragment);
+    NvAssetLoaderFree(moment_transparency_capturemoments_fragment);
+    NvAssetLoaderFree(moment_transparency_blend_fragment);
 
     NvGLSLProgram::setGlobalShaderHeader(NULL);
 }
@@ -412,6 +487,9 @@ void WeightedBlendedOIT::DestroyShaders()
 
     delete m_shaderWeightedBlend;
     delete m_shaderWeightedFinal;
+
+    delete m_momentCaptureMomentsBlend;
+    delete m_momentTransparencyBlend;
 }
 
 //--------------------------------------------------------------------------
@@ -572,7 +650,7 @@ void WeightedBlendedOIT::RenderWeightedBlendedOIT()
 
         m_shaderWeightedBlend->enable();
         m_shaderWeightedBlend->setUniform1f("uAlpha", m_opacity);
-        m_shaderWeightedBlend->setUniform1f("uDepthScale", m_weightParameter);
+        m_shaderWeightedBlend->setUniform1f("uDepthScale", m_wb_weightParameter);
         DrawModel(m_shaderWeightedBlend);
         m_shaderWeightedBlend->disable();
 
@@ -605,9 +683,113 @@ void WeightedBlendedOIT::RenderWeightedBlendedOIT()
 }
 
 //--------------------------------------------------------------------------
+void WeightedBlendedOIT::RenderMomentTransparency()
+{
+    glDisable(GL_DEPTH_TEST);
+
+    {
+#if ENABLE_GPU_TIMERS
+        NvGPUTimerScope timer(&m_timers[TIMER_GEOMETRY]);
+#endif
+
+        // ---------------------------------------------------------------------
+        // 1. Moments+Geometry pass
+        // ---------------------------------------------------------------------
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_momentFboId);
+
+        const GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+        glDrawBuffers(2, drawBuffers);
+
+        float clearColorZero[4] = { 0.f, 0.f, 0.f, 0.f };
+        glClearBufferfv(GL_COLOR, 0, clearColorZero);           // clear moments buffer to 0.0
+        glClearBufferfv(GL_COLOR, 1, clearColorZero);           // clear total optical depth buffer to 0.0
+
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunci(0, GL_ONE, GL_ONE);
+        glBlendFunci(1, GL_ONE, GL_ONE);
+
+        m_momentCaptureMomentsBlend->enable();
+        m_momentCaptureMomentsBlend->setUniform1f("C0", 1.0f / kNear);
+        m_momentCaptureMomentsBlend->setUniform1f("C1", 1.0f / logf( kFar / kNear ));
+        m_momentCaptureMomentsBlend->setUniform1f("uAlpha", m_opacity);
+        DrawModel(m_momentCaptureMomentsBlend);
+        m_momentCaptureMomentsBlend->disable();
+
+        glDisable(GL_BLEND);
+
+        CHECK_GL_ERROR();
+    }
+
+    {
+#if ENABLE_GPU_TIMERS
+        NvGPUTimerScope timer(&m_timers[TIMER_GEOMETRY]);
+#endif
+
+        // ---------------------------------------------------------------------
+        // 2. Blend+Geometry pass
+        // ---------------------------------------------------------------------
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_accumulationFboId);
+
+        const GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+        glDrawBuffers(2, drawBuffers);
+
+        // Render target 0 stores a sum (weighted RGBA colors). Clear it to 0.f.
+        // Render target 1 stores a product (transmittances). Clear it to 1.f.
+        float clearColorZero[4] = { 0.f, 0.f, 0.f, 0.f };
+        float clearColorOne[4]  = { 1.f, 1.f, 1.f, 1.f };
+        glClearBufferfv(GL_COLOR, 0, clearColorZero);
+        glClearBufferfv(GL_COLOR, 1, clearColorOne);
+
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunci(0, GL_ONE, GL_ONE);
+        glBlendFunci(1, GL_ZERO, GL_ONE_MINUS_SRC_COLOR);
+
+        m_momentTransparencyBlend->enable();
+        m_momentTransparencyBlend->setUniform1f("C0", 1.0f / kNear);
+        m_momentTransparencyBlend->setUniform1f("C1", 1.0f / logf( kFar / kNear ));
+        m_momentTransparencyBlend->setUniform1f("uAlpha", m_opacity);
+        m_momentTransparencyBlend->setUniform1f("uOverestimationWeight", m_mt_overestimationWeight);
+        m_momentTransparencyBlend->bindTextureRect("momentTex", 0, m_momentTexId);
+        m_momentTransparencyBlend->bindTextureRect("totalOpticalDepthTex", 1, m_totalOpticalDepthTexId);
+        DrawModel(m_momentTransparencyBlend);
+        m_momentTransparencyBlend->disable();
+
+        glDisable(GL_BLEND);
+
+        CHECK_GL_ERROR();
+    }
+
+    {
+#if ENABLE_GPU_TIMERS
+        NvGPUTimerScope timer(&m_timers[TIMER_COMPOSITING]);
+#endif
+
+        // ---------------------------------------------------------------------
+        // 3. Compositing pass (unchanged from WBOIT)
+        // ---------------------------------------------------------------------
+
+        glBindFramebuffer(GL_FRAMEBUFFER, getMainFBO());
+        glDrawBuffer(GL_BACK);
+
+        m_shaderWeightedFinal->enable();
+        m_shaderWeightedFinal->setUniform3f("uBackgroundColor", m_backgroundColor[0], m_backgroundColor[1], m_backgroundColor[2]);
+        m_shaderWeightedFinal->bindTextureRect("ColorTex0", 0, m_accumulationTexId[0]);
+        m_shaderWeightedFinal->bindTextureRect("ColorTex1", 1, m_accumulationTexId[1]);
+        RenderFullscreenQuad(m_shaderWeightedFinal);
+        m_shaderWeightedFinal->disable();
+
+        CHECK_GL_ERROR();
+    }
+}
+
+//--------------------------------------------------------------------------
 void WeightedBlendedOIT::RenderFullscreenQuad(NvGLSLProgram* shader)
 {
-    shader->setUniformMatrix4fv("uModelViewMatrix", m_fullscreenMVP._array);
+    shader->setUniformMatrix4fv("uModelViewProjMatrix", m_fullscreenMVP._array);
     NvDrawQuadGL(0);
 }
 

@@ -1,6 +1,6 @@
 //----------------------------------------------------------------------------------
-// File:        gl4-kepler\WeightedBlendedOIT\assets\shaders/base_vertex.glsl
-// SDK Version: v3.00 
+// File:        gl4-kepler\WeightedBlendedOIT\assets\shaders/moment_transparency_capturemoments_fragment.glsl
+// SDK Version: v3.00
 // Email:       gameworks@nvidia.com
 // Site:        http://developer.nvidia.com/
 //
@@ -31,11 +31,52 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //----------------------------------------------------------------------------------
-layout(location=0) in vec4 inVertexPosition;
 
-uniform mat4 uModelViewProjMatrix;
+uniform float C0;   //  1.0 / nearPlane
+uniform float C1;   //  1.0 / log( farPlane / nearPlane )
+
+vec4 ShadeFragment();
+
+//layout(location=0) in vec3 vTexCoord; //  already defined in shade_fragment.glsl
+layout(location=1) in vec3 vViewPos;
+
+layout(location=0) out vec4 oMoments;
+layout(location=1) out float oTotalOpticalDepth;
+
+//  the following code can be found in
+//  https://briansharpe.files.wordpress.com/2018/07/moment-transparency-supp-av.pdf
+
+float DepthToUnit( float z )
+{
+    return log( z * C0 ) * C1;
+}
+
+vec4 MakeMoments4( float z )
+{
+    float zsq = z * z;
+    return vec4( z, zsq, zsq * z, zsq * zsq );
+}
+
+void WriteMoments(
+    float z,
+    float alpha,
+    out vec4 o_moments,         // write to FP32_RGBA as additive
+    out float o_opticalDepth )  // write to FP32_R as additive
+{
+    const float kMaxAlpha = 1.0 - 0.5/256.0; // clamp alpha
+    float opticalDepth = -log( 1.0 - ( alpha * kMaxAlpha ) );
+    float unitPos = DepthToUnit( z );
+    o_moments = MakeMoments4( unitPos ) * opticalDepth;
+    o_opticalDepth = opticalDepth;
+}
 
 void main(void)
 {
-     gl_Position = uModelViewProjMatrix * inVertexPosition;
+    vec4 color = ShadeFragment();
+
+    WriteMoments(
+        -vViewPos.z,            //  z
+        color.a,                //  alpha
+        oMoments,               //  o_moments
+        oTotalOpticalDepth );   //  o_opticalDepth
 }

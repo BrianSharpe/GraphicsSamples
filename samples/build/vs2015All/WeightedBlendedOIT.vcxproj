@@ -364,6 +364,10 @@
 		</AndroidBuild>
 		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\front_peeling_peel_fragment.glsl">
 		</AndroidBuild>
+		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\moment_transparency_blend_fragment.glsl">
+		</AndroidBuild>
+		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\moment_transparency_capturemoments_fragment.glsl">
+		</AndroidBuild>
 		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\shade_fragment.glsl">
 		</AndroidBuild>
 		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\weighted_blend_fragment.glsl">
