@@ -78,6 +78,14 @@ public:
         TIMER_COUNT
     };
 
+    enum {
+        MOMENT_RESOLUTION_FULL,         //  1/1
+        MOMENT_RESOLUTION_HALF,         //  1/2
+        MOMENT_RESOLUTION_QUARTER,      //  1/4
+        MOMENT_RESOLUTION_EIGHTH,       //  1/8
+        MOMENT_RESOLUTION_COUNT
+    };
+
 protected:
     void InitDepthPeelingRenderTargets();
     void DeleteDepthPeelingRenderTargets();
@@ -117,6 +125,7 @@ protected:
     float m_opacity;
     uint32_t m_mode;
     uint32_t m_numGeoPasses;
+    uint32_t m_momentResolution;
 
 #if ENABLE_GPU_TIMERS
     NvGPUTimer m_timers[TIMER_COUNT];
@@ -138,6 +147,7 @@ protected:
     GLuint m_momentTexId;
     GLuint m_totalOpticalDepthTexId;
     GLuint m_momentFboId;       //  holds both moments + totalOpticalDepth
+    uint32_t m_momentTextureResolution;
 
     nv::matrix4f m_MVP;
     nv::matrix4f m_normalMat;

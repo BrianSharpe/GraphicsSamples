@@ -37,6 +37,8 @@ uniform float C1;   //  1.0 / log( farPlane / nearPlane )
 
 uniform float uOverestimationWeight;    //  default = 0.25
 
+uniform ivec2 uScreenResolution;
+
 vec4 ShadeFragment();
 
 //layout(location=0) in vec3 vTexCoord; //  already defined in shade_fragment.glsl
@@ -45,8 +47,8 @@ layout(location=1) in vec3 vViewPos;
 layout(location=0) out vec4 oSumColor;
 layout(location=1) out vec4 oSumWeight;
 
-uniform sampler2DRect momentTex;
-uniform sampler2DRect totalOpticalDepthTex;
+uniform sampler2D momentTex;
+uniform sampler2D totalOpticalDepthTex;
 
 //  minor hlsl -> glsl conversion code for use in EstimateIntegralFrom4Moments()
 #define float2 vec2
@@ -152,8 +154,9 @@ void main(void)
 {
     vec4 color = ShadeFragment();
 
-    vec4 moments = texture(momentTex, gl_FragCoord.xy);
-    float totalOD = texture(totalOpticalDepthTex, gl_FragCoord.xy).r;
+    vec2 screenUV = gl_FragCoord.xy / uScreenResolution;
+    vec4 moments = texture(momentTex, screenUV);
+    float totalOD = texture(totalOpticalDepthTex, screenUV).r;
 
     float weight = w(
         -vViewPos.z,    //  z

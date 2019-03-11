@@ -73,12 +73,21 @@ static NvTweakEnum<uint32_t> MODEL_OPTIONS[] =
     {"Dragon", WeightedBlendedOIT::DRAGON_MODEL},
 };
 
+static NvTweakEnum<uint32_t> MT_RES_OPTIONS[] =
+{
+    {"Full", WeightedBlendedOIT::MOMENT_RESOLUTION_FULL},
+    {"Half", WeightedBlendedOIT::MOMENT_RESOLUTION_HALF},
+    {"Quarter", WeightedBlendedOIT::MOMENT_RESOLUTION_QUARTER},
+    {"Eighth", WeightedBlendedOIT::MOMENT_RESOLUTION_EIGHTH}
+};
+
 WeightedBlendedOIT::WeightedBlendedOIT() :
     m_imageWidth(0),
     m_imageHeight(0),
     m_opacity(0.8f),
     m_mode(MOMENT_TRANSPARENCY_MODE),
     m_numGeoPasses(0),
+    m_momentResolution(MOMENT_RESOLUTION_FULL),
     m_backgroundColor(g_sky),
     m_wb_weightParameter(0.5f),
     m_mt_overestimationWeight(0.25f),
@@ -87,7 +96,8 @@ WeightedBlendedOIT::WeightedBlendedOIT() :
     m_accumulationFboId(0),
     m_momentTexId(0),
     m_totalOpticalDepthTexId(0),
-    m_momentFboId(0)
+    m_momentFboId(0),
+    m_momentTextureResolution(m_momentResolution)
 {
     m_accumulationTexId[0] = m_accumulationTexId[1] = 0;
 
@@ -126,6 +136,7 @@ void WeightedBlendedOIT::initUI()
         mTweakBar->addValue("MT Overestimation Weight:", m_mt_overestimationWeight, 0.0f, 1.0f, 0.01f);
         mTweakBar->addEnum("Model:", m_modelID, MODEL_OPTIONS, MODELS_COUNT);
         mTweakBar->addEnum("OIT Method:", m_mode, ALGORITHM_OPTIONS, MODE_COUNT);
+        mTweakBar->addEnum("MT Moments Resolution:", m_momentResolution, MT_RES_OPTIONS, MOMENT_RESOLUTION_COUNT); 
     }
 
     // UI elements for displaying pass statistics
@@ -213,6 +224,12 @@ void WeightedBlendedOIT::draw(void)
     nv::perspective(proj, 45.0f, (GLfloat)m_width / (GLfloat)m_height, kNear, kFar);
     m_MVP = proj * m_transformer->getModelViewMat();
     m_normalMat = m_transformer->getRotationMat();
+
+    if ( m_momentTextureResolution != m_momentResolution )
+    {
+        DeleteMomentTransparencyRenderTargets();
+        InitMomentTransparencyRenderTargets();
+    }
 
     switch (m_mode)
     {
@@ -352,32 +369,37 @@ void WeightedBlendedOIT::InitMomentTransparencyRenderTargets()
     glGenTextures(1, &m_momentTexId);
     glGenTextures(1, &m_totalOpticalDepthTexId);
 
+    uint32_t momentWidth = std::max( m_imageWidth / ( 1u << m_momentResolution ), 1u );
+    uint32_t momentHeight = std::max( m_imageHeight / ( 1u << m_momentResolution ), 1u );
+
     //	moment buffer
-    glBindTexture(GL_TEXTURE_RECTANGLE, m_momentTexId);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_RGBA32F,
-                 m_imageWidth, m_imageHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+    glBindTexture(GL_TEXTURE_2D, m_momentTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F,
+                 momentWidth, momentHeight, 0, GL_RGBA, GL_FLOAT, NULL);
 
     //	total optical depth buffer
-    glBindTexture(GL_TEXTURE_RECTANGLE, m_totalOpticalDepthTexId);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_R32F,
-                 m_imageWidth, m_imageHeight, 0, GL_RED, GL_FLOAT, NULL);
+    glBindTexture(GL_TEXTURE_2D, m_totalOpticalDepthTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F,
+                 momentWidth, momentHeight, 0, GL_RED, GL_FLOAT, NULL);
 
     glGenFramebuffers(1, &m_momentFboId);
     glBindFramebuffer(GL_FRAMEBUFFER, m_momentFboId);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_RECTANGLE, m_momentTexId, 0);
+                           GL_TEXTURE_2D, m_momentTexId, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
-                           GL_TEXTURE_RECTANGLE, m_totalOpticalDepthTexId, 0);
+                           GL_TEXTURE_2D, m_totalOpticalDepthTexId, 0);
 
     CHECK_GL_ERROR();
+
+    m_momentTextureResolution = m_momentResolution;
 }
 
 //--------------------------------------------------------------------------
@@ -698,6 +720,10 @@ void WeightedBlendedOIT::RenderMomentTransparency()
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_momentFboId);
 
+        uint32_t momentWidth = std::max( m_imageWidth / ( 1u << m_momentResolution ), 1u );
+        uint32_t momentHeight = std::max( m_imageHeight / ( 1u << m_momentResolution ), 1u );
+        glViewport(0, 0, momentWidth, momentHeight);
+
         const GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
         glDrawBuffers(2, drawBuffers);
 
@@ -733,6 +759,8 @@ void WeightedBlendedOIT::RenderMomentTransparency()
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_accumulationFboId);
 
+        glViewport(0, 0, m_imageWidth, m_imageHeight);
+
         const GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
         glDrawBuffers(2, drawBuffers);
 
@@ -753,8 +781,9 @@ void WeightedBlendedOIT::RenderMomentTransparency()
         m_momentTransparencyBlend->setUniform1f("C1", 1.0f / logf( kFar / kNear ));
         m_momentTransparencyBlend->setUniform1f("uAlpha", m_opacity);
         m_momentTransparencyBlend->setUniform1f("uOverestimationWeight", m_mt_overestimationWeight);
-        m_momentTransparencyBlend->bindTextureRect("momentTex", 0, m_momentTexId);
-        m_momentTransparencyBlend->bindTextureRect("totalOpticalDepthTex", 1, m_totalOpticalDepthTexId);
+        m_momentTransparencyBlend->setUniform2i("uScreenResolution", m_imageWidth, m_imageHeight );
+        m_momentTransparencyBlend->bindTexture2D("momentTex", 0, m_momentTexId);
+        m_momentTransparencyBlend->bindTexture2D("totalOpticalDepthTex", 1, m_totalOpticalDepthTexId);
         DrawModel(m_momentTransparencyBlend);
         m_momentTransparencyBlend->disable();
 
