@@ -118,7 +118,8 @@ protected:
     NvGLSLProgram* m_shaderWeightedBlend;
     NvGLSLProgram* m_shaderWeightedFinal;
 
-    NvGLSLProgram* m_momentCaptureMomentsBlend;
+    NvGLSLProgram* m_momentTransparencyCaptureMoments;
+    NvGLSLProgram* m_momentTransparencyBlurMoments;
     NvGLSLProgram* m_momentTransparencyBlend;
 
     int m_imageWidth;
@@ -135,6 +136,7 @@ protected:
     const float *m_backgroundColor;
     float m_wb_weightParameter;
     float m_mt_overestimationWeight;
+    float m_mt_momentBlurRadius;
 
     GLuint m_frontFboId[2];
     GLuint m_frontDepthTexId[2];
@@ -147,7 +149,10 @@ protected:
 
     GLuint m_momentTexId;
     GLuint m_totalOpticalDepthTexId;
-    GLuint m_momentFboId;       //  holds both moments + totalOpticalDepth
+    GLuint m_momentFboId;               //  holds both moments + totalOpticalDepth
+    GLuint m_momentPingPongTexId;
+    GLuint m_totalOpticalDepthPingPongTexId;
+    GLuint m_momentPingPongFboId;       //  holds both moments + totalOpticalDepth
     uint32_t m_momentTextureResolution;
 
     nv::matrix4f m_MVP;

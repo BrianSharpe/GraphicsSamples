@@ -91,12 +91,17 @@ WeightedBlendedOIT::WeightedBlendedOIT() :
     m_backgroundColor(g_sky),
     m_wb_weightParameter(0.5f),
     m_mt_overestimationWeight(0.25f),
-    m_momentCaptureMomentsBlend(0),
+    m_mt_momentBlurRadius(0.0f),
+    m_momentTransparencyCaptureMoments(0),
+    m_momentTransparencyBlurMoments(0),
     m_momentTransparencyBlend(0),
     m_accumulationFboId(0),
     m_momentTexId(0),
     m_totalOpticalDepthTexId(0),
     m_momentFboId(0),
+    m_momentPingPongTexId(0),
+    m_totalOpticalDepthPingPongTexId(0),
+    m_momentPingPongFboId(0),
     m_momentTextureResolution(m_momentResolution)
 {
     m_accumulationTexId[0] = m_accumulationTexId[1] = 0;
@@ -134,6 +139,7 @@ void WeightedBlendedOIT::initUI()
         mTweakBar->addValue("Opacity:", m_opacity, 0.0f, 1.0f, 0.05f);
         mTweakBar->addValue("WB Weight Parameter:", m_wb_weightParameter, 0.1f, 1.0f, 0.05f);
         mTweakBar->addValue("MT Overestimation Weight:", m_mt_overestimationWeight, 0.0f, 1.0f, 0.01f);
+        mTweakBar->addValue("MT Moment Blur Radius:", m_mt_momentBlurRadius, 0.0f, 5.0f, 0.01f);
         mTweakBar->addEnum("Model:", m_modelID, MODEL_OPTIONS, MODELS_COUNT);
         mTweakBar->addEnum("OIT Method:", m_mode, ALGORITHM_OPTIONS, MODE_COUNT);
         mTweakBar->addEnum("MT Moments Resolution:", m_momentResolution, MT_RES_OPTIONS, MOMENT_RESOLUTION_COUNT); 
@@ -368,13 +374,24 @@ void WeightedBlendedOIT::DeleteAccumulationRenderTargets()
 void WeightedBlendedOIT::InitMomentTransparencyRenderTargets()
 {
     glGenTextures(1, &m_momentTexId);
+    glGenTextures(1, &m_momentPingPongTexId);
     glGenTextures(1, &m_totalOpticalDepthTexId);
+    glGenTextures(1, &m_totalOpticalDepthPingPongTexId);
 
     uint32_t momentWidth = std::max( m_imageWidth / ( 1u << m_momentResolution ), 1u );
     uint32_t momentHeight = std::max( m_imageHeight / ( 1u << m_momentResolution ), 1u );
 
     //	moment buffer
     glBindTexture(GL_TEXTURE_2D, m_momentTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F,
+                 momentWidth, momentHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+
+    //	moment buffer (pingpong blur)
+    glBindTexture(GL_TEXTURE_2D, m_momentPingPongTexId);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
@@ -391,12 +408,30 @@ void WeightedBlendedOIT::InitMomentTransparencyRenderTargets()
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F,
                  momentWidth, momentHeight, 0, GL_RED, GL_FLOAT, NULL);
 
+    //	total optical depth buffer (pingpong blur)
+    glBindTexture(GL_TEXTURE_2D, m_totalOpticalDepthPingPongTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (m_momentResolution == 0u) ? GL_NEAREST : GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F,
+                 momentWidth, momentHeight, 0, GL_RED, GL_FLOAT, NULL);
+
+    // fb
     glGenFramebuffers(1, &m_momentFboId);
     glBindFramebuffer(GL_FRAMEBUFFER, m_momentFboId);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, m_momentTexId, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
                            GL_TEXTURE_2D, m_totalOpticalDepthTexId, 0);
+
+    // fb (pingpong blur)
+    glGenFramebuffers(1, &m_momentPingPongFboId);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_momentPingPongFboId);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, m_momentPingPongTexId, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, m_totalOpticalDepthPingPongTexId, 0);
 
     CHECK_GL_ERROR();
 
@@ -409,6 +444,10 @@ void WeightedBlendedOIT::DeleteMomentTransparencyRenderTargets()
     glDeleteFramebuffers(1, &m_momentFboId);
     glDeleteTextures(1, &m_momentTexId);
     glDeleteTextures(1, &m_totalOpticalDepthTexId);
+
+    glDeleteFramebuffers(1, &m_momentPingPongFboId);
+    glDeleteTextures(1, &m_momentPingPongTexId);
+    glDeleteTextures(1, &m_totalOpticalDepthPingPongTexId);
 }
 
 //--------------------------------------------------------------------------
@@ -455,6 +494,9 @@ void WeightedBlendedOIT::BuildShaders()
     m_shaderWeightedFinal = NvGLSLProgram::createFromFiles("shaders/base_vertex.glsl",
         "shaders/weighted_final_fragment.glsl");
 
+    m_momentTransparencyBlurMoments = NvGLSLProgram::createFromFiles("shaders/base_vertex.glsl",
+        "shaders/moment_transparency_blur_fragment.glsl");
+
     int32_t len;
     char* base_shade_vertex = NvAssetLoaderRead("shaders/base_shade_vertex.glsl", len);
     char* shade_fragment = NvAssetLoaderRead("shaders/shade_fragment.glsl", len);
@@ -482,8 +524,8 @@ void WeightedBlendedOIT::BuildShaders()
     NV_ASSERT(m_shaderWeightedBlend);
 
     frag[1] = moment_transparency_capturemoments_fragment;
-    m_momentCaptureMomentsBlend = NvGLSLProgram::createFromStrings(vert, 1, frag, 2);
-    NV_ASSERT(m_momentCaptureMomentsBlend);
+    m_momentTransparencyCaptureMoments = NvGLSLProgram::createFromStrings(vert, 1, frag, 2);
+    NV_ASSERT(m_momentTransparencyCaptureMoments);
 
     frag[1] = moment_transparency_blend_fragment;
     m_momentTransparencyBlend = NvGLSLProgram::createFromStrings(vert, 1, frag, 2);
@@ -511,7 +553,8 @@ void WeightedBlendedOIT::DestroyShaders()
     delete m_shaderWeightedBlend;
     delete m_shaderWeightedFinal;
 
-    delete m_momentCaptureMomentsBlend;
+    delete m_momentTransparencyCaptureMoments;
+    delete m_momentTransparencyBlurMoments;
     delete m_momentTransparencyBlend;
 }
 
@@ -749,14 +792,44 @@ void WeightedBlendedOIT::RenderMomentTransparency()
         glBlendFunci(0, GL_ONE, GL_ONE);
         glBlendFunci(1, GL_ONE, GL_ONE);
 
-        m_momentCaptureMomentsBlend->enable();
-        m_momentCaptureMomentsBlend->setUniform1f("C0", 1.0f / kNear);
-        m_momentCaptureMomentsBlend->setUniform1f("C1", 1.0f / logf( kFar / kNear ));
-        m_momentCaptureMomentsBlend->setUniform1f("uAlpha", m_opacity);
-        DrawModel(m_momentCaptureMomentsBlend);
-        m_momentCaptureMomentsBlend->disable();
+        m_momentTransparencyCaptureMoments->enable();
+        m_momentTransparencyCaptureMoments->setUniform1f("C0", 1.0f / kNear);
+        m_momentTransparencyCaptureMoments->setUniform1f("C1", 1.0f / logf( kFar / kNear ));
+        m_momentTransparencyCaptureMoments->setUniform1f("uAlpha", m_opacity);
+        DrawModel(m_momentTransparencyCaptureMoments);
+        m_momentTransparencyCaptureMoments->disable();
 
         glDisable(GL_BLEND);
+
+        // moment pingpong blur
+        if (m_mt_momentBlurRadius > 0.0f)
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_momentPingPongFboId);
+
+            glViewport(0, 0, momentWidth, momentHeight);
+            glDrawBuffers(2, drawBuffers);
+
+            m_momentTransparencyBlurMoments->enable();
+            m_momentTransparencyBlurMoments->bindTexture2D("momentTex", 0, m_momentTexId);
+            m_momentTransparencyBlurMoments->bindTexture2D("totalOpticalDepthTex", 1, m_totalOpticalDepthTexId);
+            m_momentTransparencyBlurMoments->setUniform1f("uBlurRadius", m_mt_momentBlurRadius);
+            m_momentTransparencyBlurMoments->setUniform2i("uBlurDirection", 1, 0);  // xblur
+            RenderFullscreenQuad(m_momentTransparencyBlurMoments);
+            m_momentTransparencyBlurMoments->disable();
+
+            glBindFramebuffer(GL_FRAMEBUFFER, m_momentFboId);
+
+            glViewport(0, 0, momentWidth, momentHeight);
+            glDrawBuffers(2, drawBuffers);
+
+            m_momentTransparencyBlurMoments->enable();
+            m_momentTransparencyBlurMoments->bindTexture2D("momentTex", 0, m_momentPingPongTexId);
+            m_momentTransparencyBlurMoments->bindTexture2D("totalOpticalDepthTex", 1, m_totalOpticalDepthPingPongTexId);
+            m_momentTransparencyBlurMoments->setUniform1f("uBlurRadius", m_mt_momentBlurRadius);
+            m_momentTransparencyBlurMoments->setUniform2i("uBlurDirection", 0, 1);  // yblur
+            RenderFullscreenQuad(m_momentTransparencyBlurMoments);
+            m_momentTransparencyBlurMoments->disable();
+        }
 
         CHECK_GL_ERROR();
     }

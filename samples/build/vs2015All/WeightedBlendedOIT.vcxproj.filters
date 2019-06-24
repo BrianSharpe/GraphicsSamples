@@ -38,6 +38,9 @@
 		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\moment_transparency_blend_fragment.glsl">
 			<Filter>shaders</Filter>
 		</AndroidBuild>
+		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\moment_transparency_blur_fragment.glsl">
+                        <Filter>shaders</Filter>
+                </AndroidBuild>
 		<AndroidBuild Include="..\..\gl4-kepler\WeightedBlendedOIT\assets\shaders\moment_transparency_capturemoments_fragment.glsl">
 			<Filter>shaders</Filter>
 		</AndroidBuild>
