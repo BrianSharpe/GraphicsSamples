@@ -239,7 +239,7 @@ void WeightedBlendedOIT::draw(void)
         case WEIGHTED_BLENDED_MODE:
             RenderWeightedBlendedOIT();
             break;
-	case MOMENT_TRANSPARENCY_MODE:
+        case MOMENT_TRANSPARENCY_MODE:
             RenderMomentTransparency();
             break;
     }
@@ -258,6 +258,7 @@ void WeightedBlendedOIT::draw(void)
         }
 
         std::ostringstream s;
+        s << "moments: " << std::fixed << std::setprecision(2) << gpuTimesMS[TIMER_MOMENTS] << " ms" << std::endl;
         s << "geometry: " << std::fixed << std::setprecision(2) << gpuTimesMS[TIMER_GEOMETRY] << " ms" << std::endl;
         s << "compositing: " << std::fixed << std::setprecision(2) << gpuTimesMS[TIMER_COMPOSITING] << " ms" << std::endl;
         m_statsText->SetString(s.str().c_str());
@@ -525,6 +526,12 @@ void WeightedBlendedOIT::ReloadShaders()
 void WeightedBlendedOIT::RenderFrontToBackPeeling()
 {
     {
+    #if ENABLE_GPU_TIMERS
+        NvGPUTimerScope timer(&m_timers[TIMER_MOMENTS]);
+    #endif
+    }
+
+    {
 #if ENABLE_GPU_TIMERS
         NvGPUTimerScope timer(&m_timers[TIMER_GEOMETRY]);
 #endif
@@ -646,6 +653,12 @@ void WeightedBlendedOIT::RenderWeightedBlendedOIT()
 
     {
 #if ENABLE_GPU_TIMERS
+        NvGPUTimerScope timer(&m_timers[TIMER_MOMENTS]);
+#endif
+    }
+
+    {
+#if ENABLE_GPU_TIMERS
         NvGPUTimerScope timer(&m_timers[TIMER_GEOMETRY]);
 #endif
 
@@ -711,7 +724,7 @@ void WeightedBlendedOIT::RenderMomentTransparency()
 
     {
 #if ENABLE_GPU_TIMERS
-        NvGPUTimerScope timer(&m_timers[TIMER_GEOMETRY]);
+        NvGPUTimerScope timer(&m_timers[TIMER_MOMENTS]);
 #endif
 
         // ---------------------------------------------------------------------

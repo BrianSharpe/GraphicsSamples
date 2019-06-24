@@ -73,6 +73,7 @@ public:
     };
 
     enum {
+        TIMER_MOMENTS,
         TIMER_GEOMETRY,
         TIMER_COMPOSITING,
         TIMER_COUNT
